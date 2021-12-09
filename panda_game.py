@@ -2,11 +2,37 @@ from direct.task import Task
 from direct.showbase.ShowBase import ShowBase, messenger
 from direct.showbase import DirectObject
 from panda3d.core import WindowProperties, Vec3, Vec4, lookAt, Quat
-import serial, json
+import serial, json, time
+from threading import Thread
 
 arduino = serial.Serial('/dev/ttyACM0')  # open serial port
+VALUES = {"AngleX": float("0"), "AngleY": float("0"), "AngleZ": float("0"),
+          "AccX": float("0"), "AccY": float("0"), "AccZ": float("0")}
 
+def read_serial_values():
+    global VALUES
+    try:
+        values_ant = json.loads(read_serial().decode().strip())
+        values_act = json.loads(read_serial().decode().strip())
+        VALUES = {"AngleX": calculateAcc(values_act["AngleX"], values_ant["AngleX"]), 
+                    "AngleY": calculateAcc(values_act["AngleY"], values_ant["AngleY"]),
+                    "AngleZ": calculateAcc(values_act["AngleZ"], values_ant["AngleZ"]),
+                    "AccX"  : calculateAcc(values_act["AccX"], values_ant["AccX"]),
+                    "AccY"  : calculateAcc(values_act["AccY"], values_ant["AccY"]),
+                    "AccZ"  : calculateAcc(values_act["AccZ"], values_ant["AccZ"])}
 
+    except Exception as e:
+        VALUES = {"AngleX": float("0"), "AngleY": float("0"), "AngleZ": float("0"),
+                    "AccX": float("0"), "AccY": float("0"), "AccZ": float("0")}
+        
+
+def calculateAcc(ant, act):
+    return float(act) - float(ant)
+
+def read_serial():
+    data = arduino.readline()
+    return data
+    
 class MyApp(ShowBase):
     def __init__(self):
         ShowBase.__init__(self)
@@ -24,7 +50,7 @@ class MyApp(ShowBase):
         self.ball.reparentTo(self.render)
         self.ball.setScale(1,1,1)
         self.ball.setPos(0, 5, 0)
-        self.speed = 50.0
+        self.speed = 20.0
 
         # Controll the camera (not moving)
         self.disableMouse()
@@ -72,51 +98,31 @@ class MyApp(ShowBase):
         
     def update(self, task):
         self.dt = globalClock.getDt()
-        controller_info = self.read_serial_values()
-        if float(controller_info["x"]) < 0:
-            messenger.send('arrow_right-up')
-            messenger.send('arrow_left')
-        if float(controller_info["x"]) > 0:
-            messenger.send('arrow_left-up')
-            messenger.send('arrow_right')
-        if float(controller_info["y"]) < 0:
-            messenger.send('arrow_up-up')
-            messenger.send('arrow_down')
-        if float(controller_info["y"]) > 0:
-            messenger.send('arrow_down-up')
-            messenger.send('arrow_up')
- 
+
+        controller_info = VALUES
+               
         hpr = Vec3(0, 0, 0)
+        hpr += Vec3(
+            # Esto es así por algún motivo
+            -controller_info["AngleX"] * self.dt * self.speed, 
+            +controller_info["AngleY"] * self.dt * self.speed, 
+            +controller_info["AngleZ"] * self.dt * self.speed)        
         
-        if self.keyMap["up"]:
-            hpr += Vec3(0, -self.dt * self.speed, 0)
-        if self.keyMap["down"]:
-            hpr += Vec3(0, self.dt * self.speed, 0)
-        if self.keyMap["left"]:
-            hpr += Vec3(-self.dt * self.speed, 0, 0)
-        if self.keyMap["right"]:
-            hpr += Vec3(self.dt * self.speed, 0, 0)
+        self.ball.setHpr(self.ball, hpr)
+        
+        ## Esto deberá ser lo mismo que el ángulo, pero con otra propiedad que ni idea de cual es
+        ballpos = Vec3(0, 0, 0)
+        ballpos += Vec3(
+            # Esto es así por algún motivo
+            -controller_info["AccX"], 
+            +controller_info["AccY"], 
+            +controller_info["AccZ"]) 
+        
+        # self.ball.setPos(self.ball.getPos() + ballpos)
+
         if self.keyMap["reset"]:
             self.ball.setHpr(0, 0, 0)
             self.ball.setPos(0, 5, 0)
-
-        deltaQuat = Quat()
-        deltaQuat.setHpr(hpr)
-        oldQuat = self.ball.getQuat()
-        newQuat = oldQuat * deltaQuat
-        self.ball.setQuat(newQuat)
-
-        ballpos = Vec3(0, 0, 0)
-        if self.keyMap["forward"]:
-            ballpos += Vec3(0, 0, self.dt * self.speed / 10)
-        if self.keyMap["backward"]:
-            ballpos += Vec3(0, 0, -self.dt * self.speed / 10)
-        if self.keyMap["moveright"]:
-            ballpos += Vec3(self.dt * self.speed / 10, 0, 0)
-        if self.keyMap["moveleft"]:
-            ballpos += Vec3(-self.dt * self.speed / 10, 0, 0)
-        
-        self.ball.setPos(self.ball.getPos() + ballpos)
 
         return task.cont
      
@@ -127,15 +133,11 @@ class MyApp(ShowBase):
         self.ball.setH(self.ball,1)
         return Task.cont
 
-    def read_serial_values(self):
-        try:
-            values = json.loads(self.read_serial().decode().strip())
-        except:
-            values = {"x": "0", "y": "0", "z": "0"}
-        return values
+def reader():
+    while True:
+        read_serial_values()
 
-    def read_serial(self):
-        data = arduino.readline()
-        return data
-app = MyApp()
-app.run()
+if __name__ == "__main__":
+    Thread(target=reader).start()
+    app = MyApp()
+    app.run()
